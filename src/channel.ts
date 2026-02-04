@@ -1115,7 +1115,11 @@ export const dingtalkPlugin = {
   config: {
     listAccountIds: (cfg: OpenClawConfig): string[] => {
       const config = getConfig(cfg);
-      return (config.accounts && Object.keys(config.accounts).length > 0) ? Object.keys(config.accounts) : isConfigured(cfg) ? ['default'] : [];
+      return config.accounts && Object.keys(config.accounts).length > 0
+        ? Object.keys(config.accounts)
+        : isConfigured(cfg)
+          ? ['default']
+          : [];
     },
     resolveAccount: (cfg: OpenClawConfig, accountId?: string) => {
       const config = getConfig(cfg);
@@ -1154,7 +1158,7 @@ export const dingtalkPlugin = {
   },
   messaging: {
     normalizeTarget: ({ target }: any) => (target ? { targetId: target.replace(/^(dingtalk|dd|ding):/i, '') } : null),
-    targetResolver: { looksLikeId: (id: string): boolean => /^[\w-]+$/.test(id), hint: '<conversationId>' },
+    targetResolver: { looksLikeId: (id: string): boolean => /^[\w-/=]+$/.test(id), hint: '<conversationId>' },
   },
   outbound: {
     deliveryMode: 'direct',
