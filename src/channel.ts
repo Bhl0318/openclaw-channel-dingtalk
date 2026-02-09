@@ -57,28 +57,68 @@ const DINGTALK_API = 'https://api.dingtalk.com';
 
 // ============ Message Deduplication ============
 // Prevents duplicate message processing when DingTalk retries delivery
+// Uses pure in-memory storage with short TTL and lazy cleanup during processing
 
-const processedMessages = new Map<string, number>();
-const MESSAGE_DEDUP_TTL = 5 * 60 * 1000; // 5 minutes
-const MESSAGE_DEDUP_CLEANUP_THRESHOLD = 100;
+const processedMessages = new Map<string, number>(); // Map<dedupKey, expiresAt>
+const MESSAGE_DEDUP_TTL = 60000; // 60 seconds
+const MESSAGE_DEDUP_MAX_SIZE = 1000; // Hard cap to prevent memory pressure during bursts
+let messageCounter = 0; // Counter for deterministic cleanup triggering (safe due to Node.js single-threaded event loop)
 
-function cleanupProcessedMessages(): void {
+// Check if message was already processed (with lazy cleanup of expired entries)
+function isMessageProcessed(dedupKey: string): boolean {
   const now = Date.now();
-  for (const [msgId, timestamp] of processedMessages.entries()) {
-    if (now - timestamp > MESSAGE_DEDUP_TTL) {
-      processedMessages.delete(msgId);
-    }
+  const expiresAt = processedMessages.get(dedupKey);
+  
+  if (expiresAt === undefined) {
+    return false;
   }
+  
+  // Lazy cleanup: remove expired entry if found
+  if (now >= expiresAt) {
+    processedMessages.delete(dedupKey);
+    return false;
+  }
+  
+  return true;
 }
 
-function isMessageProcessed(messageId: string): boolean {
-  return processedMessages.has(messageId);
-}
-
-function markMessageProcessed(messageId: string): void {
-  processedMessages.set(messageId, Date.now());
-  if (processedMessages.size >= MESSAGE_DEDUP_CLEANUP_THRESHOLD) {
-    cleanupProcessedMessages();
+// Mark message as processed with bot-scoped key
+function markMessageProcessed(dedupKey: string): void {
+  const expiresAt = Date.now() + MESSAGE_DEDUP_TTL;
+  processedMessages.set(dedupKey, expiresAt);
+  
+  // Hard cap: if Map exceeds max size, force immediate cleanup
+  if (processedMessages.size > MESSAGE_DEDUP_MAX_SIZE) {
+    const now = Date.now();
+    for (const [key, expiry] of processedMessages.entries()) {
+      if (now >= expiry) {
+        processedMessages.delete(key);
+      }
+    }
+    // If still over limit after cleanup, clear oldest entries (safety valve)
+    // Maps maintain insertion order, so we can delete early entries
+    if (processedMessages.size > MESSAGE_DEDUP_MAX_SIZE) {
+      const removeCount = processedMessages.size - MESSAGE_DEDUP_MAX_SIZE;
+      let removed = 0;
+      for (const key of processedMessages.keys()) {
+        processedMessages.delete(key);
+        if (++removed >= removeCount) break;
+      }
+    }
+    return; // Skip regular cleanup since we just did a full sweep
+  }
+  
+  // Lazy cleanup: remove expired entries deterministically every 10 messages
+  // With 60s TTL, Map stays small under normal load, but we avoid cleanup on every message for performance
+  messageCounter++;
+  if (messageCounter >= 10) {
+    messageCounter = 0;
+    const now = Date.now();
+    for (const [key, expiry] of processedMessages.entries()) {
+      if (now >= expiry) {
+        processedMessages.delete(key);
+      }
+    }
   }
 }
 
@@ -1452,13 +1492,21 @@ export const dingtalkPlugin = {
           }
           const data = JSON.parse(res.data) as DingTalkInboundMessage;
 
-          // Message deduplication: skip if already processed
-          const dedupKey = data.msgId || messageId;
-          if (dedupKey && isMessageProcessed(dedupKey)) {
-            ctx.log?.debug?.(`[${account.accountId}] Skipping duplicate message: ${dedupKey}`);
-            return;
-          }
-          if (dedupKey) {
+          // Message deduplication: use bot-scoped key (robotKey:msgId) to prevent cross-bot conflicts
+          // robotKey priority: robotCode (DingTalk's bot identifier) > clientId (app key) > accountId (local ID)
+          // This ensures consistent keys per bot instance (config values remain stable during runtime)
+          const robotKey = config.robotCode || config.clientId || account.accountId;
+          const msgId = data.msgId || messageId;
+          
+          // Skip dedup if we don't have a message ID (extremely rare edge case)
+          if (!msgId) {
+            ctx.log?.warn?.(`[${account.accountId}] No message ID available for deduplication`);
+          } else {
+            const dedupKey = `${robotKey}:${msgId}`;
+            if (isMessageProcessed(dedupKey)) {
+              ctx.log?.debug?.(`[${account.accountId}] Skipping duplicate message: ${dedupKey}`);
+              return;
+            }
             markMessageProcessed(dedupKey);
           }
 
