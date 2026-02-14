@@ -28,15 +28,16 @@ import type {
   AICardInstance,
   AICardStreamingRequest,
   ConnectionManagerConfig,
+  DingTalkChannelPlugin,
 } from './types';
-import { AICardStatus } from './types';
+import { AICardStatus, ConnectionState } from './types';
 import { detectMediaTypeFromExtension, uploadMedia as uploadMediaUtil } from './media-utils';
 
 /**
  * Get current timestamp in ISO 8601 format for status tracking
  */
-function getCurrentTimestamp(): string {
-  return new Date().toISOString();
+function getCurrentTimestamp(): number {
+  return Date.now();
 }
 
 // Access Token cache - keyed by clientId for multi-account support
@@ -75,17 +76,17 @@ let messageCounter = 0; // Counter for deterministic cleanup triggering (safe du
 function isMessageProcessed(dedupKey: string): boolean {
   const now = Date.now();
   const expiresAt = processedMessages.get(dedupKey);
-  
+
   if (expiresAt === undefined) {
     return false;
   }
-  
+
   // Lazy cleanup: remove expired entry if found
   if (now >= expiresAt) {
     processedMessages.delete(dedupKey);
     return false;
   }
-  
+
   return true;
 }
 
@@ -93,7 +94,7 @@ function isMessageProcessed(dedupKey: string): boolean {
 function markMessageProcessed(dedupKey: string): void {
   const expiresAt = Date.now() + MESSAGE_DEDUP_TTL;
   processedMessages.set(dedupKey, expiresAt);
-  
+
   // Hard cap: if Map exceeds max size, force immediate cleanup
   if (processedMessages.size > MESSAGE_DEDUP_MAX_SIZE) {
     const now = Date.now();
@@ -114,7 +115,7 @@ function markMessageProcessed(dedupKey: string): void {
     }
     return; // Skip regular cleanup since we just did a full sweep
   }
-  
+
   // Lazy cleanup: remove expired entries deterministically every 10 messages
   // With 60s TTL, Map stays small under normal load, but we avoid cleanup on every message for performance
   messageCounter++;
@@ -169,7 +170,7 @@ function isSenderAllowed(params: { allow: NormalizedAllowFrom; senderId?: string
 // 群组通道授权
 function isSenderGroupAllowed(params: { allow: NormalizedAllowFrom; groupId?: string }): boolean {
   const { allow, groupId } = params;
-  
+
   if (groupId && allow.entriesLower.includes(groupId.toLowerCase())) return true;
   return false;
 }
@@ -624,7 +625,7 @@ async function downloadMedia(
           log.error(`[DingTalk] downloadMedia response data: ${dataDetail}`);
         }
       } else {
-        log.error('[DingTalk] Failed to download media:', err.message);
+        log.error(`[DingTalk] Failed to download media: ${err.message}`);
       }
     }
     return null;
@@ -922,7 +923,6 @@ async function streamAICard(
         `*注意：当前及后续消息将自动转为 Markdown 发送，直到问题修复。*\n` +
         `*参考文档: https://github.com/soimy/openclaw-channel-dingtalk/blob/main/README.md#3-%E5%BB%BA%E7%AB%8B%E5%8D%A1%E7%89%87%E6%A8%A1%E6%9D%BF%E5%8F%AF%E9%80%89`;
 
-
       log?.error?.(
         `[DingTalk][AICard] Streaming failed with 500 unknownError. Key: ${usedKey}, Template: ${cardTemplateId}. ` +
           `Verify that "cardTemplateKey" matches the content field variable name in your card template.`
@@ -1117,7 +1117,7 @@ async function handleDingTalkMessage(params: HandleDingTalkMessageParams): Promi
     if (groupPolicy === 'allowlist') {
       const normalizedAllowFrom = normalizeAllowFrom(allowFrom);
       const isAllowed = isSenderGroupAllowed({ allow: normalizedAllowFrom, groupId });
-     
+
       if (!isAllowed) {
         log?.debug?.(
           `[DingTalk] Group blocked: conversationId=${groupId} senderId=${senderId} not in allowlist (groupPolicy=allowlist)`
@@ -1349,7 +1349,7 @@ async function handleDingTalkMessage(params: HandleDingTalkMessageParams): Promi
 }
 
 // DingTalk Channel Definition
-export const dingtalkPlugin = {
+export const dingtalkPlugin: DingTalkChannelPlugin = {
   id: 'dingtalk',
   meta: {
     id: 'dingtalk',
@@ -1379,13 +1379,19 @@ export const dingtalkPlugin = {
           ? ['default']
           : [];
     },
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string) => {
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => {
       const config = getConfig(cfg);
       const id = accountId || 'default';
       const account = config.accounts?.[id];
-      return account
-        ? { accountId: id, config: account, enabled: account.enabled !== false }
-        : { accountId: 'default', config, enabled: config.enabled !== false };
+      const resolvedConfig = account || config;
+      const configured = Boolean(resolvedConfig.clientId && resolvedConfig.clientSecret);
+      return {
+        accountId: id,
+        config: resolvedConfig,
+        enabled: resolvedConfig.enabled !== false,
+        configured,
+        name: resolvedConfig.name || null,
+      };
     },
     defaultAccountId: (): string => 'default',
     isConfigured: (account: any): boolean => Boolean(account.config?.clientId && account.config?.clientSecret),
@@ -1543,7 +1549,7 @@ export const dingtalkPlugin = {
           // This ensures consistent keys per bot instance (config values remain stable during runtime)
           const robotKey = config.robotCode || config.clientId || account.accountId;
           const msgId = data.msgId || messageId;
-          
+
           // Skip dedup if we don't have a message ID (extremely rare edge case)
           if (!msgId) {
             ctx.log?.warn?.(`[${account.accountId}] No message ID available for deduplication`);
@@ -1569,12 +1575,35 @@ export const dingtalkPlugin = {
         }
       });
 
+      // Track stopped state to prevent duplicate stop operations
+      // The 'stopped' flag guards against multiple termination paths (abort signal, explicit stop)
+      // from executing concurrently and ensures each lifecycle transition updates snapshot only once
+      let stopped = false;
+
       // Create connection manager configuration
       const connectionConfig: ConnectionManagerConfig = {
         maxAttempts: config.maxConnectionAttempts ?? 10,
         initialDelay: config.initialReconnectDelay ?? 1000,
         maxDelay: config.maxReconnectDelay ?? 60000,
         jitter: config.reconnectJitter ?? 0.3,
+        onStateChange: (state: ConnectionState, error?: string) => {
+          if (stopped) return;
+          ctx.log?.debug?.(`[${account.accountId}] Connection state changed to: ${state}${error ? ` (${error})` : ''}`);
+          if (state === ConnectionState.CONNECTED) {
+            ctx.setStatus({
+              ...ctx.getStatus(),
+              running: true,
+              lastStartAt: getCurrentTimestamp(),
+              lastError: null,
+            });
+          } else if (state === ConnectionState.FAILED || state === ConnectionState.DISCONNECTED) {
+            ctx.setStatus({
+              ...ctx.getStatus(),
+              running: false,
+              lastError: error || `Connection ${state.toLowerCase()}`,
+            });
+          }
+        },
       };
 
       ctx.log?.debug?.(
@@ -1586,25 +1615,21 @@ export const dingtalkPlugin = {
       // Create connection manager
       const connectionManager = new ConnectionManager(client, account.accountId, connectionConfig, ctx.log);
 
-      // Track stopped state to prevent duplicate stop operations
-      // The 'stopped' flag guards against multiple termination paths (abort signal, explicit stop)
-      // from executing concurrently and ensures each lifecycle transition updates snapshot only once
-      let stopped = false;
-
       // Setup abort signal handler BEFORE connecting
       // This allows the abort signal to cancel in-flight connection attempts
       if (abortSignal) {
         // Check if already aborted before we even start
         if (abortSignal.aborted) {
           ctx.log?.warn?.(`[${account.accountId}] Abort signal already active, skipping connection`);
-          
+
           // Update snapshot: channel aborted before start
-          ctx.updateSnapshot?.({
+          ctx.setStatus({
+            ...ctx.getStatus(),
             running: false,
             lastStopAt: getCurrentTimestamp(),
             lastError: 'Connection aborted before start',
           });
-          
+
           throw new Error('Connection aborted before start');
         }
 
@@ -1613,9 +1638,10 @@ export const dingtalkPlugin = {
           stopped = true;
           ctx.log?.info?.(`[${account.accountId}] Abort signal received, stopping DingTalk Stream client...`);
           connectionManager.stop();
-          
+
           // Update snapshot: channel stopped by abort signal
-          ctx.updateSnapshot?.({
+          ctx.setStatus({
+            ...ctx.getStatus(),
             running: false,
             lastStopAt: getCurrentTimestamp(),
           });
@@ -1625,32 +1651,30 @@ export const dingtalkPlugin = {
       // Connect with robust retry logic
       try {
         await connectionManager.connect();
-        
+
         // Only mark as running if we weren't stopped and the connection is actually established
         if (!stopped && connectionManager.isConnected()) {
           // Update snapshot: connection successful, channel is now running
-          ctx.updateSnapshot?.({
+          ctx.setStatus({
+            ...ctx.getStatus(),
             running: true,
             lastStartAt: getCurrentTimestamp(),
             lastError: null,
           });
-          ctx.log?.info?.(
-            `[${account.accountId}] DingTalk Stream client connected successfully`
-          );
+          ctx.log?.info?.(`[${account.accountId}] DingTalk Stream client connected successfully`);
         } else {
           // Startup was cancelled or connection is not established; do not overwrite stopped snapshot.
           ctx.log?.info?.(
             `[${account.accountId}] DingTalk Stream client connect() completed but channel is ` +
-            `not running (stopped=${stopped}, connected=${connectionManager.isConnected()})`
+              `not running (stopped=${stopped}, connected=${connectionManager.isConnected()})`
           );
         }
       } catch (err: any) {
-        ctx.log?.error?.(
-          `[${account.accountId}] Failed to establish connection: ${err.message}`
-        );
+        ctx.log?.error?.(`[${account.accountId}] Failed to establish connection: ${err.message}`);
 
         // Update snapshot: connection failed
-        ctx.updateSnapshot?.({
+        ctx.setStatus({
+          ...ctx.getStatus(),
           running: false,
           lastError: err.message || 'Connection failed',
         });
@@ -1664,13 +1688,14 @@ export const dingtalkPlugin = {
           stopped = true;
           ctx.log?.info?.(`[${account.accountId}] Stopping DingTalk Stream client...`);
           connectionManager.stop();
-          
+
           // Update snapshot: channel stopped
-          ctx.updateSnapshot?.({
+          ctx.setStatus({
+            ...ctx.getStatus(),
             running: false,
             lastStopAt: getCurrentTimestamp(),
           });
-          
+
           ctx.log?.info?.(`[${account.accountId}] DingTalk Stream client stopped`);
         },
       };
@@ -1678,28 +1703,56 @@ export const dingtalkPlugin = {
   },
   status: {
     defaultRuntime: { accountId: 'default', running: false, lastStartAt: null, lastStopAt: null, lastError: null },
-    probe: async ({ cfg }: any) => {
-      if (!isConfigured(cfg)) return { ok: false, error: 'Not configured' };
-      try {
-        const config = getConfig(cfg);
-        await getAccessToken(config);
-        return { ok: true, details: { clientId: config.clientId } };
-      } catch (error: any) {
-        return { ok: false, error: error.message };
-      }
+    collectStatusIssues: (accounts: any[]) => {
+      return accounts.flatMap((account) => {
+        if (!account.configured) {
+          return [
+            {
+              channel: 'dingtalk',
+              accountId: account.accountId,
+              kind: 'config',
+              message: 'Account not configured (missing clientId or clientSecret)',
+            },
+          ];
+        }
+        return [];
+      });
     },
-    buildAccountSnapshot: ({ snapshot }: any) => ({
-      running: snapshot?.running ?? false,
-      lastStartAt: snapshot?.lastStartAt ?? null,
-      lastStopAt: snapshot?.lastStopAt ?? null,
-      lastError: snapshot?.lastError ?? null,
-    }),
     buildChannelSummary: ({ snapshot }: any) => ({
       configured: snapshot?.configured ?? false,
       running: snapshot?.running ?? false,
       lastStartAt: snapshot?.lastStartAt ?? null,
       lastStopAt: snapshot?.lastStopAt ?? null,
       lastError: snapshot?.lastError ?? null,
+    }),
+    probeAccount: async ({ account, timeoutMs }: any) => {
+      if (!account.configured || !account.config?.clientId || !account.config?.clientSecret) {
+        return { ok: false, error: 'Not configured' };
+      }
+      try {
+        const controller = new AbortController();
+        const timeoutId = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+        try {
+          await getAccessToken(account.config);
+          return { ok: true, details: { clientId: account.config.clientId } };
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
+        }
+      } catch (error: any) {
+        return { ok: false, error: error.message };
+      }
+    },
+    buildAccountSnapshot: ({ account, runtime, snapshot, probe }: any) => ({
+      accountId: account.accountId,
+      name: account.name,
+      enabled: account.enabled,
+      configured: account.configured,
+      clientId: account.config?.clientId ?? null,
+      running: runtime?.running ?? snapshot?.running ?? false,
+      lastStartAt: runtime?.lastStartAt ?? snapshot?.lastStartAt ?? null,
+      lastStopAt: runtime?.lastStopAt ?? snapshot?.lastStopAt ?? null,
+      lastError: runtime?.lastError ?? snapshot?.lastError ?? null,
+      probe,
     }),
   },
 };

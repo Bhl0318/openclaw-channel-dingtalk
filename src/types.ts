@@ -282,34 +282,97 @@ export interface RetryOptions {
 }
 
 /**
- * Logger interface
+ * Channel log sink
+ * Matches OpenClaw SDK's ChannelLogSink type
  */
-export interface Logger {
-  debug?: (message: string, ...args: any[]) => void;
-  info?: (message: string, ...args: any[]) => void;
-  warn?: (message: string, ...args: any[]) => void;
-  error?: (message: string, ...args: any[]) => void;
+export interface ChannelLogSink {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+  error: (msg: string) => void;
+  debug?: (msg: string) => void;
 }
 
 /**
- * Channel runtime snapshot
+ * @deprecated Use ChannelLogSink instead
  */
-export interface ChannelSnapshot {
-  running: boolean;
-  lastStartAt: string | null;
-  lastStopAt: string | null;
-  lastError: string | null;
+export type Logger = ChannelLogSink;
+
+/**
+ * Channel account snapshot
+ * Matches OpenClaw SDK's ChannelAccountSnapshot type
+ */
+export interface ChannelAccountSnapshot {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  linked?: boolean;
+  running?: boolean;
+  connected?: boolean;
+  reconnectAttempts?: number;
+  lastConnectedAt?: number | null;
+  lastDisconnect?:
+    | string
+    | {
+        at: number;
+        status?: number;
+        error?: string;
+        loggedOut?: boolean;
+      }
+    | null;
+  lastMessageAt?: number | null;
+  lastEventAt?: number | null;
+  lastError?: string | null;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+  mode?: string;
+  dmPolicy?: string;
+  allowFrom?: string[];
+  tokenSource?: string;
+  botTokenSource?: string;
+  appTokenSource?: string;
+  credentialSource?: string;
+  secretSource?: string;
+  audienceType?: string;
+  audience?: string;
+  webhookPath?: string;
+  webhookUrl?: string;
+  baseUrl?: string;
+  allowUnmentionedGroups?: boolean;
+  cliPath?: string | null;
+  dbPath?: string | null;
+  port?: number | null;
+  probe?: unknown;
+  lastProbeAt?: number | null;
+  audit?: unknown;
+  application?: unknown;
+  bot?: unknown;
+  publicKey?: string | null;
+  profile?: unknown;
+  channelAccessToken?: string;
+  channelSecret?: string;
 }
+
+/**
+ * @deprecated Use ChannelAccountSnapshot instead
+ */
+export type ChannelSnapshot = ChannelAccountSnapshot;
 
 /**
  * Plugin gateway start context
+ * Matches OpenClaw SDK's ChannelGatewayContext type
  */
 export interface GatewayStartContext {
-  account: ResolvedAccount;
   cfg: OpenClawConfig;
-  abortSignal?: AbortSignal;
-  log?: Logger;
-  updateSnapshot?: (snapshot: Partial<ChannelSnapshot>) => void;
+  accountId: string;
+  account: ResolvedAccount;
+  runtime: unknown;
+  abortSignal: AbortSignal;
+  log?: ChannelLogSink;
+  getStatus: () => ChannelAccountSnapshot;
+  setStatus: (next: ChannelAccountSnapshot) => void;
 }
 
 /**
@@ -321,66 +384,139 @@ export interface GatewayStopResult {
 
 /**
  * DingTalk channel plugin definition
+ * Matches OpenClaw SDK's ChannelPlugin type structure
  */
 export interface DingTalkChannelPlugin {
-  id: string;
+  id: 'dingtalk';
   meta: {
-    id: string;
+    id: 'dingtalk';
     label: string;
     selectionLabel: string;
     docsPath: string;
+    docsLabel?: string;
     blurb: string;
     aliases: string[];
+    order?: number;
   };
   capabilities: {
-    chatTypes: string[];
+    chatTypes: ('direct' | 'group')[];
     reactions: boolean;
     threads: boolean;
     media: boolean;
     nativeCommands: boolean;
     blockStreaming: boolean;
+    outbound: boolean;
   };
-  reload: {
+  defaults?: {
+    queue?: {
+      debounceMs?: number;
+    };
+  };
+  reload?: {
     configPrefixes: string[];
+    noopPrefixes?: string[];
   };
   config: {
     listAccountIds: (cfg: OpenClawConfig) => string[];
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string) => ResolvedAccount;
-    defaultAccountId: () => string;
-    isConfigured: (account: any) => boolean;
-    describeAccount: (account: any) => AccountDescriptor;
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount & { configured: boolean };
+    defaultAccountId: (cfg?: OpenClawConfig) => string;
+    setAccountEnabled?: (params: { cfg: OpenClawConfig; accountId: string; enabled: boolean }) => OpenClawConfig;
+    deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
+    isConfigured: (account: ResolvedAccount, cfg?: OpenClawConfig) => boolean;
+    describeAccount: (account: ResolvedAccount, cfg?: OpenClawConfig) => AccountDescriptor;
+  };
+  configSchema?: {
+    schema: Record<string, unknown>;
+    uiHints?: Record<
+      string,
+      { label?: string; help?: string; advanced?: boolean; sensitive?: boolean; placeholder?: string }
+    >;
   };
   security: {
-    resolveDmPolicy: (params: any) => any;
+    resolveDmPolicy: (ctx: { account: ResolvedAccount; cfg: OpenClawConfig }) => {
+      policy: 'open' | 'pairing' | 'allowlist';
+      allowFrom: string[];
+      policyPath: string;
+      allowFromPath: string;
+      approveHint: string;
+      normalizeEntry: (raw: string) => string;
+    } | null;
+    collectWarnings?: (ctx: { account: ResolvedAccount; cfg: OpenClawConfig }) => string[] | Promise<string[]>;
   };
   groups: {
-    resolveRequireMention: (params: any) => boolean;
+    resolveRequireMention: (ctx: { cfg: OpenClawConfig; groupChannel?: string; groupId?: string }) => boolean;
+    resolveGroupIntroHint?: (ctx: { groupId?: string; groupChannel?: string }) => string | undefined;
   };
   messaging: {
-    normalizeTarget: (params: any) => any;
+    normalizeTarget: (params: { target?: string }) => { targetId: string } | null;
     targetResolver: {
       looksLikeId: (id: string) => boolean;
       hint: string;
     };
   };
   outbound: {
-    deliveryMode: string;
-    sendText: (params: any) => Promise<{ ok: boolean; data?: any; error?: any }>;
+    deliveryMode: 'direct' | 'gateway' | 'hybrid';
+    resolveTarget?: (params: {
+      cfg?: OpenClawConfig;
+      to?: string;
+      allowFrom?: string[];
+      accountId?: string | null;
+      mode?: string;
+    }) => { ok: true; to: string } | { ok: false; error: Error };
+    sendText: (ctx: {
+      cfg: OpenClawConfig;
+      to: string;
+      text: string;
+      replyToId?: string | null;
+      threadId?: string | number | null;
+      accountId?: string | null;
+    }) => Promise<{ ok: boolean; messageId?: string; data?: unknown; error?: string | Error }>;
+    sendMedia?: (ctx: {
+      cfg: OpenClawConfig;
+      to: string;
+      text?: string;
+      mediaUrl?: string;
+      mediaPath?: string;
+      mediaType?: 'image' | 'voice' | 'video' | 'file';
+      accountId?: string | null;
+    }) => Promise<{ ok: boolean; messageId?: string; data?: unknown; error?: string | Error }>;
+  };
+  status: {
+    defaultRuntime?: ChannelSnapshot & { accountId: string };
+    collectStatusIssues?: (accounts: (ChannelSnapshot & { configured: boolean; accountId: string })[]) => Array<{
+      channel: string;
+      accountId: string;
+      kind: 'config' | 'runtime' | 'auth';
+      message: string;
+    }>;
+    buildChannelSummary?: (params: {
+      account: ResolvedAccount;
+      cfg: OpenClawConfig;
+      defaultAccountId: string;
+      snapshot: ChannelSnapshot;
+    }) => Record<string, unknown>;
+    probeAccount?: (params: {
+      account: ResolvedAccount & { configured: boolean };
+      timeoutMs: number;
+      cfg: OpenClawConfig;
+    }) => Promise<{ ok: boolean; error?: string; details?: unknown }>;
+    buildAccountSnapshot: (params: {
+      account: ResolvedAccount & { configured: boolean };
+      cfg: OpenClawConfig;
+      runtime?: ChannelSnapshot;
+      snapshot?: ChannelSnapshot;
+      probe?: { ok: boolean; error?: string; details?: unknown };
+    }) => ChannelSnapshot & {
+      accountId: string;
+      name?: string;
+      enabled: boolean;
+      configured: boolean;
+      clientId?: string | null;
+      probe?: { ok: boolean; error?: string; details?: unknown };
+    };
   };
   gateway: {
     startAccount: (ctx: GatewayStartContext) => Promise<GatewayStopResult>;
-  };
-  status: {
-    defaultRuntime: {
-      accountId: string;
-      running: boolean;
-      lastStartAt: null;
-      lastStopAt: null;
-      lastError: null;
-    };
-    probe: (params: any) => Promise<{ ok: boolean; error?: string; details?: any }>;
-    buildAccountSnapshot: (params: any) => any;
-    buildChannelSummary: (params: any) => any;
   };
 }
 
@@ -493,6 +629,8 @@ export interface ConnectionManagerConfig {
   initialDelay: number;
   maxDelay: number;
   jitter: number;
+  /** Callback invoked when connection state changes */
+  onStateChange?: (state: ConnectionState, error?: string) => void;
 }
 
 /**
