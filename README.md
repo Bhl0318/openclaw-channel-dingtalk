@@ -19,7 +19,7 @@
 直接运行 openclaw 插件安装命令，openclaw 会自动处理下载、安装依赖和注册：
 
 ```bash
-openclaw plugins install https://github.com/soimy/clawdbot-channel-dingtalk.git
+openclaw plugins install https://github.com/soimy/openclaw-channel-dingtalk.git
 ```
 
 ### 方法 B：通过本地源码安装
