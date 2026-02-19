@@ -1,6 +1,6 @@
 {
   "name": "@soimy/dingtalk",
-  "version": "2.6.5",
+  "version": "2.7.0",
   "description": "DingTalk (钉钉) channel plugin for OpenClaw",
   "main": "index.ts",
   "type": "module",
