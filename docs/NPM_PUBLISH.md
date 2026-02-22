@@ -38,6 +38,25 @@ git tag v2.7.1
 git push origin v2.7.1
 ```
 
+## Beta 版本发布（CI）
+
+当前 CI 支持标准 semver 预发布版本（`-beta.*`）自动发布到 npm `beta` dist-tag。
+
+推荐流程：
+
+```bash
+# 例如从 2.7.1 生成 2.7.2-beta.0，并自动创建对应 git tag
+npm version prerelease --preid=beta
+
+# 推送代码和 tag，触发 GitHub Actions 自动发布
+git push origin main --follow-tags
+```
+
+CI 行为：
+- tag（去掉可选 `v` 前缀）必须与 `package.json.version` 完全一致
+- 版本包含 `-beta.*` 时，自动执行 `npm publish --access public --tag beta`
+- 非预发布版本自动发布到 `latest`
+
 ## 前置要求
 
 1. **npm 账号**
@@ -182,14 +201,14 @@ npm unpublish @soimy/dingtalk@版本号
 
 ### Q: 如何发布 beta 版本？
 
-**A:** 使用预发布版本号：
+**A:** 推荐走 GitHub CI 自动发布：
 
 ```bash
 # 创建 beta 版本
 npm version prerelease --preid=beta
 
-# 发布为 beta tag
-npm publish --access public --tag beta
+# 推送代码和 tag，CI 将自动发布到 npm beta dist-tag
+git push origin main --follow-tags
 ```
 
 用户可通过以下方式安装：
