@@ -21,6 +21,7 @@
 2. 确保工作流具备 `id-token: write` 权限（已在本仓库 workflow 配置）
 
 说明：Trusted publisher 模式下，发布步骤不再需要 `NPM_TOKEN` Secret。
+同时不要在仓库/组织变量里注入 `NODE_AUTH_TOKEN` 或 `NPM_TOKEN`，否则 npm 会优先尝试 token 认证，可能导致 OIDC 不生效。
 
 推荐发布命令：
 

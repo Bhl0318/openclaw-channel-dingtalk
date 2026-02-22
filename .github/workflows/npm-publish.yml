@@ -17,6 +17,9 @@ jobs:
     publish:
         runs-on: ubuntu-latest
         timeout-minutes: 20
+        permissions:
+            id-token: write
+            contents: read
 
         steps:
             - name: Checkout
@@ -32,7 +35,6 @@ jobs:
               with:
                   node-version: 24
                   cache: pnpm
-                  registry-url: "https://registry.npmjs.org"
 
             - name: Install dependencies
               run: pnpm install --frozen-lockfile
@@ -73,6 +75,13 @@ jobs:
 
             - name: Publish package to npm
               run: |
+                  # Force trusted publishing path: remove any legacy token auth context.
+                  if [[ -n "${NPM_CONFIG_USERCONFIG:-}" && -f "${NPM_CONFIG_USERCONFIG}" ]]; then
+                    rm -f "${NPM_CONFIG_USERCONFIG}"
+                  fi
+                  unset NODE_AUTH_TOKEN
+                  unset NPM_TOKEN
+
                   if [[ "${{ steps.release.outputs.npm_tag }}" == "beta" ]]; then
                     npm publish --access public --tag beta
                   else
