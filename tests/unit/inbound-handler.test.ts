@@ -281,6 +281,78 @@ describe('inbound-handler', () => {
         expect(shared.finishAICardMock).not.toHaveBeenCalled();
     });
 
+    it('handleDingTalkMessage skips finishAICard when current card is already terminal', async () => {
+        const runtime = buildRuntime();
+        runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher = vi
+            .fn()
+            .mockResolvedValue({ queuedFinal: 'queued final' });
+        shared.getRuntimeMock.mockReturnValueOnce(runtime);
+
+        const card = { cardInstanceId: 'card_terminal', state: '5', lastUpdated: Date.now() } as any;
+        shared.createAICardMock.mockResolvedValueOnce(card);
+        shared.isCardInTerminalStateMock.mockImplementation((state: string) => state === '5');
+
+        await handleDingTalkMessage({
+            cfg: {},
+            accountId: 'main',
+            sessionWebhook: 'https://session.webhook',
+            log: undefined,
+            dingtalkConfig: { dmPolicy: 'open', messageType: 'card' } as any,
+            data: {
+                msgId: 'm7_terminal',
+                msgtype: 'text',
+                text: { content: 'hello' },
+                conversationType: '1',
+                conversationId: 'cid_ok',
+                senderId: 'user_1',
+                chatbotUserId: 'bot_1',
+                sessionWebhook: 'https://session.webhook',
+                createAt: Date.now(),
+            },
+        } as any);
+
+        expect(shared.isCardInTerminalStateMock).toHaveBeenCalledWith('5');
+        expect(shared.finishAICardMock).not.toHaveBeenCalled();
+    });
+
+    it('handleDingTalkMessage ignores thinking and tool card updates when card is already finalized', async () => {
+        const runtime = buildRuntime();
+        runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher = vi
+            .fn()
+            .mockImplementation(async ({ dispatcherOptions, replyOptions }) => {
+                await replyOptions?.onReasoningStream?.({ text: 'thinking' });
+                await dispatcherOptions.deliver({ text: 'tool output' }, { kind: 'tool' });
+                return { queuedFinal: '' };
+            });
+        shared.getRuntimeMock.mockReturnValueOnce(runtime);
+
+        const card = { cardInstanceId: 'card_finalized', state: '3', lastUpdated: Date.now() } as any;
+        shared.createAICardMock.mockResolvedValueOnce(card);
+        shared.isCardInTerminalStateMock.mockImplementation((state: string) => state === '3');
+
+        await handleDingTalkMessage({
+            cfg: {},
+            accountId: 'main',
+            sessionWebhook: 'https://session.webhook',
+            log: undefined,
+            dingtalkConfig: { dmPolicy: 'open', messageType: 'card' } as any,
+            data: {
+                msgId: 'm7_finalized',
+                msgtype: 'text',
+                text: { content: 'hello' },
+                conversationType: '1',
+                conversationId: 'cid_ok',
+                senderId: 'user_1',
+                chatbotUserId: 'bot_1',
+                sessionWebhook: 'https://session.webhook',
+                createAt: Date.now(),
+            },
+        } as any);
+
+        expect(shared.streamAICardMock).not.toHaveBeenCalled();
+        expect(shared.finishAICardMock).not.toHaveBeenCalled();
+    });
+
     it('handleDingTalkMessage marks card FAILED when finishAICard throws', async () => {
         const runtime = buildRuntime();
         shared.getRuntimeMock.mockReturnValueOnce(runtime);

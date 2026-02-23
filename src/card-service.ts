@@ -221,6 +221,13 @@ export async function streamAICard(
   finished: boolean = false,
   log?: Logger,
 ): Promise<void> {
+  if (card.state === AICardStatus.FINISHED) {
+    log?.debug?.(
+      `[DingTalk][AICard] Skip stream update because card already finalized: outTrackId=${card.cardInstanceId}`,
+    );
+    return;
+  }
+
   // Refresh token defensively before DingTalk 2h token horizon.
   const tokenAge = Date.now() - card.createdAt;
   const tokenRefreshThreshold = 90 * 60 * 1000;

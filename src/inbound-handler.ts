@@ -372,6 +372,13 @@ export async function handleDingTalkMessage(params: HandleDingTalkMessageParams)
 
           // Tool outputs are rendered into card stream as a separate formatted block.
           if (useCardMode && currentAICard && info?.kind === "tool") {
+            if (isCardInTerminalState(currentAICard.state)) {
+              log?.debug?.(
+                `[DingTalk] Skipping tool stream update because card is terminal: state=${currentAICard.state}`,
+              );
+              return;
+            }
+
             log?.info?.(
               `[DingTalk] Tool result received, streaming to AI Card: ${textToSend.slice(0, 100)}`,
             );
@@ -401,6 +408,12 @@ export async function handleDingTalkMessage(params: HandleDingTalkMessageParams)
         if (!useCardMode || !currentAICard) {
           return;
         }
+        if (isCardInTerminalState(currentAICard.state)) {
+          log?.debug?.(
+            `[DingTalk] Skipping thinking stream update because card is terminal: state=${currentAICard.state}`,
+          );
+          return;
+        }
         const thinkingText = formatContentForCard(payload.text, "thinking");
         if (!thinkingText) {
           return;
@@ -417,6 +430,13 @@ export async function handleDingTalkMessage(params: HandleDingTalkMessageParams)
   // 5) Finalize card stream if card mode is active.
   if (useCardMode && currentAICard) {
     try {
+      if (isCardInTerminalState(currentAICard.state)) {
+        log?.debug?.(
+          `[DingTalk] Skipping AI Card finalization because card is terminal: state=${currentAICard.state}`,
+        );
+        return;
+      }
+
       const isNonEmptyString = (value: any): boolean =>
         typeof value === "string" && value.trim().length > 0;
 

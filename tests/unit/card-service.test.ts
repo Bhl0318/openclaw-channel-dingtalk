@@ -167,6 +167,23 @@ describe('card-service', () => {
         expect(mockedAxios.put).toHaveBeenCalledTimes(2);
     });
 
+    it('streamAICard ignores updates when card already FINISHED', async () => {
+        const card = {
+            cardInstanceId: 'card_8',
+            accessToken: 'token_keep',
+            conversationId: 'cidA1B2C3',
+            createdAt: Date.now(),
+            lastUpdated: Date.now(),
+            state: AICardStatus.FINISHED,
+            config: { cardTemplateKey: 'content' },
+        } as any;
+
+        await streamAICard(card, 'should be ignored', false);
+
+        expect(mockedAxios.put).not.toHaveBeenCalled();
+        expect(card.state).toBe(AICardStatus.FINISHED);
+    });
+
     it('formatContentForCard truncates and annotates content', () => {
         const content = `${'x'.repeat(510)}`;
         const result = formatContentForCard(content, 'thinking');
@@ -187,7 +204,9 @@ describe('card-service', () => {
         );
 
         expect(card).toBeTruthy();
-        if (!card) return;
+        if (!card) {
+            return;
+        }
 
         card.state = AICardStatus.FINISHED;
         card.lastUpdated = Date.now() - 2 * 60 * 60 * 1000;
