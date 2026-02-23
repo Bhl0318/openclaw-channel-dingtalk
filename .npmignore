@@ -41,3 +41,4 @@ tests/
 # Non-runtime files inside src/
 src/AGENTS.md
 src/*.code-workspace
+*.code-workspace

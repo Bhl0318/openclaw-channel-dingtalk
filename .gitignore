@@ -24,3 +24,6 @@ credentials.json
 .vscode/
 .idea/
 .sisyphus/
+
+# vscode workspace settings
+*.code-workspace
