@@ -226,6 +226,7 @@ describe('inbound-handler', () => {
         expect(shared.createAICardMock).toHaveBeenCalledTimes(1);
         expect(shared.streamAICardMock).toHaveBeenCalled();
         expect(shared.finishAICardMock).toHaveBeenCalledTimes(1);
+        expect(shared.sendMessageMock).not.toHaveBeenCalled();
     });
 
     it('handleDingTalkMessage runs non-card flow and sends thinking + final outputs', async () => {

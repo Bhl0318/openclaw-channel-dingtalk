@@ -370,6 +370,11 @@ export async function handleDingTalkMessage(params: HandleDingTalkMessageParams)
             return;
           }
 
+          if (useCardMode && currentAICard && info?.kind === "final") {
+            lastCardContent = textToSend;
+            return;
+          }
+
           // Tool outputs are rendered into card stream as a separate formatted block.
           if (useCardMode && currentAICard && info?.kind === "tool") {
             if (isCardInTerminalState(currentAICard.state)) {
