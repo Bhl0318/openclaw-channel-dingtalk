@@ -439,6 +439,30 @@ openclaw gateway restart
 1. 检查 clientId 和 clientSecret 是否正确
 2. 确认网络可以访问钉钉 API
 
+### 错误 payload 日志规范（`[ErrorPayload]`）
+
+为便于快速定位 4xx/5xx 参数问题，插件会在 API 错误分支输出统一格式日志：
+
+- 通用前缀：`[DingTalk][ErrorPayload][<scope>]`
+- AI Card 前缀：`[DingTalk][AICard][ErrorPayload][<scope>]`
+- 内容格式：`code=<...> message=<...> payload=<...>`（同时保留脱敏后的完整 payload）
+
+常见 scope 示例：
+
+- `send.proactiveMessage` / `send.proactiveMedia` / `send.message`
+- `outbound.sendText` / `outbound.sendMedia`
+- `inbound.downloadMedia` / `inbound.cardFinalize`
+- `card.create` / `card.stream` / `card.stream.retryAfterRefresh`
+- `retry.beforeDecision`
+
+排查建议：
+
+```bash
+openclaw logs | grep "\[ErrorPayload\]"
+```
+
+如果你看到 `code=invalidParameter`，通常优先检查请求 payload 的必填字段（例如 `robotCode`、`userIds`、`msgKey`、`msgParam`）是否完整且格式正确。
+
 ## 开发指南
 
 ### 首次设置

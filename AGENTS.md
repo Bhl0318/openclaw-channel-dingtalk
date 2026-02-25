@@ -91,6 +91,10 @@ Current architecture is modularized by responsibility. `src/channel.ts` is now a
 
 - Use `try/catch` for async API calls
 - Log with structured prefixes (e.g. `[DingTalk]`, `[DingTalk][AICard]`)
+- For DingTalk API error payloads, use unified prefix format:
+  - Standard: `[DingTalk][ErrorPayload][<scope>]`
+  - AI Card: `[DingTalk][AICard][ErrorPayload][<scope>]`
+  - Include `code=<...> message=<...> payload=<...>` for fast diagnosis
 - Send APIs return `{ ok: boolean, error?: string }` where applicable
 - Retry with exponential backoff for transient HTTP failures (401/429/5xx)
 
