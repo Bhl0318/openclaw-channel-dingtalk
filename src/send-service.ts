@@ -147,8 +147,12 @@ export async function sendProactiveMedia(
     let msgParam: string;
 
     if (mediaType === "image") {
-      msgKey = "sampleImageMsg";
-      msgParam = JSON.stringify({ photoURL: mediaId });
+      // sampleImageMsg requires a public HTTP URL (photoURL), not a media_id.
+      // Use sampleFile instead so the uploaded media_id can be used directly.
+      const filename = path.basename(mediaPath);
+      const ext = path.extname(mediaPath).slice(1) || "png";
+      msgKey = "sampleFile";
+      msgParam = JSON.stringify({ mediaId, fileName: filename, fileType: ext });
     } else if (mediaType === "voice") {
       msgKey = "sampleAudio";
       msgParam = JSON.stringify({ mediaId, duration: "0" });
